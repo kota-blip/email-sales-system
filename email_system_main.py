@@ -241,5 +241,6 @@ if __name__ == '__main__':
     gmail_thread.start()
     
     # Flask Webhook サーバー起動
-    print("📍 Webhookサーバー起動: http://localhost:5000/callback")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+244      port = int(os.environ.get('PORT', 5000))
+245      print(f"📍 Webhookサーバー起動: http://0.0.0.0:{port}/callback")
+246      app.run(host='0.0.0.0', port=port, debug=False)

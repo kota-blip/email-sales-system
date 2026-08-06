@@ -10,7 +10,7 @@ class ClaudeHandler:
     def __init__(self, config):
         self.config = config
         self.client = anthropic.Anthropic(api_key=config.CLAUDE_API_KEY)
-        self.model = "claude-3-5-sonnet-20241022"
+        self.model = getattr(config, "CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
     
     def create_reply(self, from_email, subject, body):
         """メール返信案を作成"""

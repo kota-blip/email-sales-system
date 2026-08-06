@@ -4,3 +4,11 @@ google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.99.0
 anthropic==0.25.3
+gunicorn==21.2.0
+python-dotenv==1.0.1
+
+# 請求書集計システム用
+requests==2.31.0
+gspread==6.1.2
+google-auth==2.29.0
+pdfplumber==0.11.4

@@ -133,3 +133,84 @@ class GmailHandler:
             ).execute()
         except Exception as e:
             print(f"⚠️ 既読マーク失敗: {e}")
+
+    def search_pdf_attachments(self, query, max_results=20):
+        """指定したGmail検索クエリでメールを検索し、PDF添付ファイルを取得する
+        （請求書集計システム用）
+
+        Returns: [{'msg_id', 'from', 'subject', 'date', 'attachments': [{'filename', 'data'}]}]
+        """
+        try:
+            results = self.service.users().messages().list(
+                userId='me',
+                q=query,
+                maxResults=max_results
+            ).execute()
+
+            messages = results.get('messages', [])
+            output = []
+
+            for msg in messages:
+                msg_id = msg['id']
+                msg_data = self.service.users().messages().get(
+                    userId='me',
+                    id=msg_id,
+                    format='full'
+                ).execute()
+
+                headers = msg_data['payload']['headers']
+                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(No Subject)')
+                from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+                date_header = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+
+                attachments = self._extract_pdf_attachments(msg_id, msg_data['payload'])
+                if attachments:
+                    output.append({
+                        'msg_id': msg_id,
+                        'from': from_email,
+                        'subject': subject,
+                        'date': date_header,
+                        'attachments': attachments,
+                    })
+
+            return output
+
+        except Exception as e:
+            print(f"❌ 請求書メール検索エラー: {e}")
+            return []
+
+    def _extract_pdf_attachments(self, msg_id, payload):
+        """メールのpayloadからPDF添付ファイルのバイナリを再帰的に取得"""
+        attachments = []
+        stack = list(payload.get('parts', []) or [])
+
+        while stack:
+            part = stack.pop()
+            if part.get('parts'):
+                stack.extend(part['parts'])
+
+            filename = part.get('filename')
+            if not filename or not filename.lower().endswith('.pdf'):
+                continue
+
+            body = part.get('body', {})
+            data = body.get('data')
+            attachment_id = body.get('attachmentId')
+
+            try:
+                if data:
+                    file_data = base64.urlsafe_b64decode(data)
+                elif attachment_id:
+                    att = self.service.users().messages().attachments().get(
+                        userId='me', messageId=msg_id, id=attachment_id
+                    ).execute()
+                    file_data = base64.urlsafe_b64decode(att['data'])
+                else:
+                    continue
+            except Exception as e:
+                print(f"⚠️ 添付ファイル取得失敗 ({filename}): {e}")
+                continue
+
+            attachments.append({'filename': filename, 'data': file_data})
+
+        return attachments

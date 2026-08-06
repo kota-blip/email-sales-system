@@ -1,0 +1,31 @@
+# 環境変数・秘密情報
+.env
+.env.*
+!.env.example
+
+# Google/Gmail認証情報
+credentials.json
+token.pickle
+service_account.json
+google_service_account.json
+
+# ローカルデータストア
+drafts.json
+emails_log.json
+sales_data.json
+invoices_log.json
+invoice_cache.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# エディタ・OS
+.DS_Store
+.vscode/
+.idea/

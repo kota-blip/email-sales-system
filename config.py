@@ -66,6 +66,18 @@ class Config:
     INVOICE_MATCH_AMOUNT_TOLERANCE = float(_get_env("INVOICE_MATCH_AMOUNT_TOLERANCE", "0.15"))
     INVOICE_LOG_FILE = _get_env("INVOICE_LOG_FILE", "invoices_log.json")
 
+    # 自社名（支払対象アラートの精度向上用・任意）。
+    # 「請求先/宛先」がこの名前と一致すれば支払対象、「発行元」が一致すれば対象外と判定しやすくなる
+    OWN_COMPANY_NAME = _get_env("OWN_COMPANY_NAME", "")
+
+    # ===== 月次集計・確認のスケジュール =====
+    # 自動集計を実行する日（例: 10 = 毎月10日ごろに前月分を集計）
+    REPORT_AUTO_TRIGGER_DAY = int(_get_env("REPORT_AUTO_TRIGGER_DAY", "10"))
+    # 最終確認の軽いリマインドを送る日
+    CONFIRMATION_REMINDER_DAY = int(_get_env("CONFIRMATION_REMINDER_DAY", "15"))
+    # 最終確認の期限アラート（未確認なら強めに通知）を送る日
+    CONFIRMATION_DEADLINE_DAY = int(_get_env("CONFIRMATION_DEADLINE_DAY", "20"))
+
     def validate_for_invoice_system(self):
         """請求書集計システム起動前の必須設定チェック"""
         missing = []

@@ -45,6 +45,8 @@ class InvoiceExtractor:
             "document_date": "2026-08-05",
             "invoice_number": "INV-2026-0012",
             "registration_number": "T1234567890123",
+            "is_payable": "yes" | "no" | "uncertain",
+            "is_payable_reason": "判定理由",
             "confidence": "high" | "medium" | "low",
             "raw_note": "抽出時の注意点など",
             "filename": "invoice.pdf",
@@ -55,13 +57,25 @@ class InvoiceExtractor:
                 filename, note="PDFからテキストを抽出できませんでした（画像スキャンPDFの可能性があります。要目視確認）"
             )
 
+        own_company_name = getattr(self.claude.config, "OWN_COMPANY_NAME", "") or ""
+        if own_company_name:
+            company_line = f"【自社名（支払う側）】{own_company_name}"
+        else:
+            company_line = "【自社名】未設定（is_payableは基本的にuncertainとしてください）"
+
         prompt = f"""あなたは経理のプロフェッショナルです。
 以下は請求書・見積書・納品書のいずれかのPDFから抽出したテキストです。
 内容を読み取り、以下のJSON形式で JSONのみ を出力してください（説明文・コードフェンス不要）。
 
+{company_line}
 【ファイル名】{filename}
 【PDFテキスト】
 {pdf_text[:6000]}
+
+【支払対象(is_payable)の判定について】
+- 書類の「請求先」「宛先」が自社名と一致する（＝自社が支払う側）なら "yes"
+- 書類の「発行元」「差出人」が自社名と一致する（＝自社が請求している側で、支払うものではない）なら "no"
+- 自社名が未設定、または判別できない場合は "uncertain"
 
 【出力JSON形式】
 {{
@@ -73,6 +87,8 @@ class InvoiceExtractor:
   "document_date": "発行日（YYYY-MM-DD。不明ならnull）",
   "invoice_number": "書類番号（不明ならnull）",
   "registration_number": "インボイス登録番号 T+13桁（記載が無ければnull）",
+  "is_payable": "yes か no か uncertain（上記の判定基準に従って）",
+  "is_payable_reason": "判定理由を一言で",
   "confidence": "high か medium か low（読み取り確信度）",
   "raw_note": "判読しづらかった点・注意点があれば簡潔に。無ければ空文字"
 }}
@@ -136,6 +152,8 @@ class InvoiceExtractor:
             "document_date": None,
             "invoice_number": None,
             "registration_number": None,
+            "is_payable": "uncertain",
+            "is_payable_reason": "",
             "confidence": "low",
             "raw_note": note,
             "filename": filename,

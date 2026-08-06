@@ -26,7 +26,7 @@ INVOICE_HEADERS = [
     "書類種別", "金額(税込)", "金額(税抜)", "支払期日",
     "請求書番号", "インボイス登録番号", "Gmailメッセージ ID",
     "添付ファイル名", "見積書有無", "納品書有無", "請求書有無",
-    "ステータス", "承認者", "承認日時", "備考",
+    "支払対象", "ステータス", "承認者", "承認日時", "備考",
 ]
 
 VENDOR_SHEET = "固定支払い先マスタ"
@@ -43,6 +43,11 @@ STATUS_PENDING = "未承認"
 STATUS_APPROVED = "承認済み"
 STATUS_NEEDS_REVIEW = "要確認"
 STATUS_REJECTED = "却下"
+
+# 支払対象アラート値（「これは支払うものですか？」の判定・回答）
+PAYABLE_YES = "要払い"
+PAYABLE_NO = "対象外"
+PAYABLE_UNKNOWN = "確認中"
 
 
 class SheetsClient:

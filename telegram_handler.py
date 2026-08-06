@@ -13,6 +13,8 @@ CB_APPROVE = "appr"
 CB_EDIT = "edit"
 CB_REJECT = "rej"
 CB_CONFIRM_MONTH = "confm"
+CB_PAYABLE_YES = "payy"
+CB_PAYABLE_NO = "payn"
 
 
 class TelegramHandler:
@@ -45,15 +47,24 @@ class TelegramHandler:
             payload["reply_markup"] = reply_markup
         return self._call("sendMessage", payload)
 
-    def send_invoice_approval(self, case_id, text, chat_id=None):
-        """抽出結果を通知し、承認/修正/却下ボタンを付ける（ダブルチェックの起点）"""
-        keyboard = {
-            "inline_keyboard": [[
-                {"text": "✅ 承認", "callback_data": f"{CB_APPROVE}:{case_id}"},
-                {"text": "✏️ 修正", "callback_data": f"{CB_EDIT}:{case_id}"},
-                {"text": "❌ 却下", "callback_data": f"{CB_REJECT}:{case_id}"},
-            ]]
-        }
+    def send_invoice_approval(self, case_id, text, chat_id=None, ask_payable=False):
+        """抽出結果を通知し、承認/修正/却下ボタンを付ける（ダブルチェックの起点）
+
+        ask_payable=True の場合、「これは支払うものですか？」の判定ボタンも上段に付ける
+        （AIが支払対象を確信できなかったケース用）。
+        """
+        rows = []
+        if ask_payable:
+            rows.append([
+                {"text": "💰 支払うものです", "callback_data": f"{CB_PAYABLE_YES}:{case_id}"},
+                {"text": "🚫 対象外です", "callback_data": f"{CB_PAYABLE_NO}:{case_id}"},
+            ])
+        rows.append([
+            {"text": "✅ 承認", "callback_data": f"{CB_APPROVE}:{case_id}"},
+            {"text": "✏️ 修正", "callback_data": f"{CB_EDIT}:{case_id}"},
+            {"text": "❌ 却下", "callback_data": f"{CB_REJECT}:{case_id}"},
+        ])
+        keyboard = {"inline_keyboard": rows}
         return self.send_message(text, chat_id=chat_id, reply_markup=keyboard)
 
     def send_month_end_confirmation(self, yyyymm, text, chat_id=None):

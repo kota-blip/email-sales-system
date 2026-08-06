@@ -3,9 +3,12 @@
 請求書集計システム メインアプリ（払う側の請求書を毎月自動集計する）
 
 - Gmail監視: 添付PDF（見積書/納品書/請求書）を検出 → Claudeで構造化抽出 → Sheetsに記録
+- 支払対象アラート: 支払うものと確信できれば「💰支払うものです」と明示、判断できなければ
+  「❓これは支払うものですか？」とボタンで確認を求める（両側からのダブルチェック）
 - ダブルチェック: 抽出結果をTelegramに通知し、人間が承認/修正/却下（AI抽出→人間が1回承認）
 - 漏れ検知: 固定支払い先マスタとの突合＋3点セット（見積書/納品書/請求書）の充足チェック
-- 月次集計: 自動（月初）/手動（Telegramコマンド）でサマリを生成し、最終目視確認を依頼
+- 月次集計: 自動（毎月10日ごろ）/手動（Telegramコマンド）でサマリを生成し、最終目視確認を依頼
+  （15日ごろに軽いリマインド、20日ごろに期限アラート）
 """
 
 import threading
@@ -20,13 +23,24 @@ from gmail_handler import GmailHandler
 from invoice_extractor import InvoiceExtractor, extract_pdf_text
 from invoice_matcher import InvoiceMatcher, find_missing_fixed_vendors, make_doc_id
 from sheets_client import (
+    PAYABLE_NO,
+    PAYABLE_UNKNOWN,
+    PAYABLE_YES,
     STATUS_APPROVED,
     STATUS_NEEDS_REVIEW,
     STATUS_PENDING,
     STATUS_REJECTED,
     SheetsClient,
 )
-from telegram_handler import CB_APPROVE, CB_CONFIRM_MONTH, CB_EDIT, CB_REJECT, TelegramHandler
+from telegram_handler import (
+    CB_APPROVE,
+    CB_CONFIRM_MONTH,
+    CB_EDIT,
+    CB_PAYABLE_NO,
+    CB_PAYABLE_YES,
+    CB_REJECT,
+    TelegramHandler,
+)
 
 # ========== 初期化 ==========
 
@@ -140,6 +154,10 @@ def process_new_documents():
         print("   新規の書類はありませんでした")
 
 
+PAYABLE_MAP = {"yes": PAYABLE_YES, "no": PAYABLE_NO, "uncertain": PAYABLE_UNKNOWN}
+PAYABLE_REVERSE_MAP = {PAYABLE_YES: "yes", PAYABLE_NO: "no", PAYABLE_UNKNOWN: "uncertain"}
+
+
 def build_invoice_row(doc_id, mail_item, filename, extracted):
     target_month = target_month_from(extracted.get("document_date"))
     return {
@@ -160,6 +178,7 @@ def build_invoice_row(doc_id, mail_item, filename, extracted):
         "見積書有無": "FALSE",
         "納品書有無": "FALSE",
         "請求書有無": "FALSE",
+        "支払対象": PAYABLE_MAP.get(extracted.get("is_payable"), PAYABLE_UNKNOWN),
         "ステータス": STATUS_NEEDS_REVIEW if extracted.get("confidence") == "low" else STATUS_PENDING,
         "承認者": "",
         "承認日時": "",
@@ -168,8 +187,20 @@ def build_invoice_row(doc_id, mail_item, filename, extracted):
 
 
 def notify_new_document(row, extracted):
-    lines = [
-        "📄 <b>新しい書類を検出しました</b>",
+    payable_status = row.get("支払対象")
+
+    lines = ["📄 <b>新しい書類を検出しました</b>", ""]
+
+    if payable_status == PAYABLE_YES:
+        lines.append("💰 <b>支払うものです</b>")
+    elif payable_status == PAYABLE_NO:
+        lines.append("🚫 支払い対象ではない可能性があります（発行元が自社と一致するようです）")
+    else:
+        lines.append("❓ <b>これは支払うものですか？</b>（自動判定できませんでした。下のボタンで教えてください）")
+    if extracted.get("is_payable_reason"):
+        lines.append(f"（判定理由: {extracted['is_payable_reason']}）")
+
+    lines += [
         "",
         f"種別: {row['書類種別']}",
         f"取引先: {row['取引先名']}",
@@ -184,7 +215,8 @@ def notify_new_document(row, extracted):
     lines.append("")
     lines.append(f"書類ID: <code>{row['書類ID']}</code>")
 
-    telegram.send_invoice_approval(row["書類ID"], "\n".join(lines))
+    ask_payable = payable_status == PAYABLE_UNKNOWN
+    telegram.send_invoice_approval(row["書類ID"], "\n".join(lines), ask_payable=ask_payable)
 
 
 def regroup_cases(target_month):
@@ -227,9 +259,13 @@ def generate_monthly_report(yyyymm, notify=True):
     fixed_vendors = sheets.get_fixed_vendors()
     missing_vendors = find_missing_fixed_vendors(fixed_vendors, invoices)
 
+    # 「対象外」と確定した書類は集計金額・件数から除外する（自社発行の請求書などを混入させないため）
+    payable_invoices = [r for r in invoices if r.get("支払対象") != PAYABLE_NO]
+    uncertain_payable = [r for r in invoices if r.get("支払対象") == PAYABLE_UNKNOWN]
+
     # 案件単位で重複排除（同一案件内の行は3点セットフラグが同じ）
     cases = {}
-    for inv in invoices:
+    for inv in payable_invoices:
         case_key = inv.get("案件ID") or inv.get("書類ID")
         cases[case_key] = inv
 
@@ -238,7 +274,7 @@ def generate_monthly_report(yyyymm, notify=True):
         if not (c.get("見積書有無") == "TRUE" and c.get("納品書有無") == "TRUE" and c.get("請求書有無") == "TRUE")
     ]
 
-    invoice_docs = [r for r in invoices if r.get("書類種別") == "請求書"]
+    invoice_docs = [r for r in payable_invoices if r.get("書類種別") == "請求書"]
     total_amount = sum((_to_number(r.get("金額(税込)")) or 0) for r in invoice_docs)
     pending = [r for r in invoices if r.get("ステータス") in (STATUS_PENDING, STATUS_NEEDS_REVIEW)]
 
@@ -255,13 +291,14 @@ def generate_monthly_report(yyyymm, notify=True):
     sheets.write_monthly_summary(summary_row)
 
     if notify:
-        text = build_monthly_report_text(yyyymm, summary_row, missing_vendors, pending)
+        text = build_monthly_report_text(yyyymm, summary_row, missing_vendors, pending, uncertain_payable)
         telegram.send_month_end_confirmation(yyyymm, text)
 
     return summary_row
 
 
-def build_monthly_report_text(yyyymm, summary, missing_vendors, pending):
+def build_monthly_report_text(yyyymm, summary, missing_vendors, pending, uncertain_payable=None):
+    uncertain_payable = uncertain_payable or []
     lines = [
         f"📊 <b>{yyyymm} 月次請求書集計</b>",
         "",
@@ -279,6 +316,10 @@ def build_monthly_report_text(yyyymm, summary, missing_vendors, pending):
     else:
         lines.append("")
         lines.append("✅ 固定支払い先はすべて確認できました")
+
+    if uncertain_payable:
+        lines.append("")
+        lines.append(f"❓ 「これは支払うものですか？」が未回答の書類が{len(uncertain_payable)}件あります。")
 
     if pending:
         lines.append("")
@@ -342,6 +383,16 @@ def handle_callback(event):
         telegram.answer_callback_query(cq_id, "確定しました")
         telegram.clear_keyboard(chat_id, message_id)
         telegram.send_message(f"✅ {yyyymm} 分を確認済みとして確定しました。お疲れさまでした！", chat_id=chat_id)
+
+    elif action == CB_PAYABLE_YES:
+        sheets.update_invoice_field(key, "支払対象", PAYABLE_YES)
+        telegram.answer_callback_query(cq_id, "支払対象にしました")
+        telegram.send_message(f"💰 支払対象に設定しました\n書類ID: <code>{key}</code>", chat_id=chat_id)
+
+    elif action == CB_PAYABLE_NO:
+        sheets.update_invoice_field(key, "支払対象", PAYABLE_NO)
+        telegram.answer_callback_query(cq_id, "対象外にしました")
+        telegram.send_message(f"🚫 対象外に設定しました（月次集計から除外されます）\n書類ID: <code>{key}</code>", chat_id=chat_id)
 
 
 def handle_message(event):
@@ -417,6 +468,7 @@ def apply_correction(doc_id, modification_text, chat_id):
         "発行日": revised.get("document_date") or current.get("発行日"),
         "請求書番号": revised.get("invoice_number") or current.get("請求書番号"),
         "インボイス登録番号": revised.get("registration_number") or current.get("インボイス登録番号"),
+        "支払対象": PAYABLE_MAP.get(revised.get("is_payable"), current.get("支払対象") or PAYABLE_UNKNOWN),
         "ステータス": STATUS_PENDING,
     }
     for field, value in updates.items():
@@ -441,6 +493,8 @@ def _row_to_extracted(row):
         "document_date": row.get("発行日") or None,
         "invoice_number": row.get("請求書番号") or None,
         "registration_number": row.get("インボイス登録番号") or None,
+        "is_payable": PAYABLE_REVERSE_MAP.get(row.get("支払対象"), "uncertain"),
+        "is_payable_reason": "",
         "confidence": "medium",
         "raw_note": row.get("備考", ""),
         "filename": row.get("添付ファイル名", ""),
@@ -477,19 +531,60 @@ def gmail_watch_loop():
         time.sleep(config.INVOICE_CHECK_INTERVAL)
 
 
+def send_confirmation_reminder(yyyymm, urgent=False):
+    """月末の最終確認がまだなら、Telegramでリマインド/期限アラートを送る"""
+    summary = sheets.get_summary_for_month(yyyymm)
+    if not summary:
+        return  # まだ集計自体が生成されていない
+    if summary.get("最終確認") not in ("", "未確認", None):
+        return  # 既に確認済み
+
+    if urgent:
+        text = (
+            f"🚨 <b>{yyyymm} の最終確認期限です</b>\n\n"
+            "まだ確認が完了していません。今日中に内容を確認し、確定をお願いします。"
+        )
+    else:
+        text = (
+            f"🔔 <b>{yyyymm} の最終確認リマインド</b>\n\n"
+            f"そろそろ月次確認をお願いします（期限の目安: {config.CONFIRMATION_DEADLINE_DAY}日ごろ）。"
+        )
+    telegram.send_month_end_confirmation(yyyymm, text)
+
+
+# 当日すでに実行済みのアクションを記録し、同日中の重複実行を防ぐ
+_schedule_state = {"report": None, "reminder": None, "deadline": None}
+
+
 def monthly_auto_trigger_loop():
-    """月初に前月分の集計を自動生成する（同月分の二重生成は避ける）"""
+    """
+    スケジュールに沿って自動集計・確認リマインド・期限アラートを実行する。
+    - REPORT_AUTO_TRIGGER_DAY（既定10日）: 前月分を自動集計してTelegramに通知
+    - CONFIRMATION_REMINDER_DAY（既定15日）: 未確認なら軽いリマインド
+    - CONFIRMATION_DEADLINE_DAY（既定20日）: 未確認なら期限アラート
+    """
     while True:
         try:
             today = date.today()
-            if today.day == 1:
-                yyyymm = previous_month_str(today)
+            yyyymm = previous_month_str(today)
+
+            if today.day == config.REPORT_AUTO_TRIGGER_DAY and _schedule_state["report"] != today:
                 already = sheets.get_summary_for_month(yyyymm)
                 if not already:
-                    print(f"📅 月初のため {yyyymm} の月次集計を自動生成します")
+                    print(f"📅 {config.REPORT_AUTO_TRIGGER_DAY}日のため {yyyymm} の月次集計を自動生成します")
                     generate_monthly_report(yyyymm, notify=True)
+                _schedule_state["report"] = today
+
+            if today.day == config.CONFIRMATION_REMINDER_DAY and _schedule_state["reminder"] != today:
+                send_confirmation_reminder(yyyymm, urgent=False)
+                _schedule_state["reminder"] = today
+
+            if today.day == config.CONFIRMATION_DEADLINE_DAY and _schedule_state["deadline"] != today:
+                send_confirmation_reminder(yyyymm, urgent=True)
+                _schedule_state["deadline"] = today
+
         except Exception as e:
-            print(f"❌ 月次自動集計エラー: {e}")
+            print(f"❌ 月次自動処理エラー: {e}")
         time.sleep(6 * 60 * 60)  # 6時間ごとにチェック
 
 

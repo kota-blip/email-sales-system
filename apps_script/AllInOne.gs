@@ -1224,6 +1224,14 @@ function sendConfirmationReminder_(yyyymm, urgent) {
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
+
+    // 暴走防止：Telegramはdoポストの応答が遅い/タイムアウトすると同じupdateを再送してくることがある。
+    // update_id単位で「処理済み」を記録し、再送分は即スキップして二重処理（Gmail再検索やAPI再呼び出し）を防ぐ。
+    if (isDuplicateTelegramUpdate_(data.update_id)) {
+      Logger.log('🔁 重複したupdate_id(' + data.update_id + ')のため処理をスキップしました');
+      return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     const event = parseTelegramUpdate_(data);
 
     if (event.type === 'callback_query') {
@@ -1235,6 +1243,16 @@ function doPost(e) {
     Logger.log('Webhook処理エラー: ' + err);
   }
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/** 同じTelegram update_idを既に処理済みなら true（CacheServiceで最大6時間だけ記憶すれば十分） */
+function isDuplicateTelegramUpdate_(updateId) {
+  if (updateId === undefined || updateId === null) return false;
+  const cache = CacheService.getScriptCache();
+  const key = 'tg_update_' + updateId;
+  if (cache.get(key)) return true;
+  cache.put(key, '1', 21600); // 6時間（CacheServiceが許容する最大値）
+  return false;
 }
 
 function doGet(e) {
@@ -1371,18 +1389,74 @@ function handleMessage_(event) {
     return;
   }
 
-  const debugCodes = Array.from(text).map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(' ');
+  if (normalized.indexOf('登録') === 0 || normalized.indexOf('/register') === 0) {
+    handleManualRegister_(text, chatId, event.fromUser);
+    return;
+  }
+
   tgSendMessage(
     '📧 請求書集計システム\n\n' +
     'コマンド:\n' +
     '「一覧」 - 未承認/要確認の書類一覧\n' +
     '「集計 [YYYY-MM]」 - 月次集計を実行（省略時は先月分）\n' +
     '「スキャン」 - Gmailを今すぐ確認\n' +
+    '「登録 会社名」 - メールに来ない請求書を手動登録\n' +
     '「停止」 - 緊急停止（Gmail監視・API呼び出しを全部止める）\n' +
     '「再開」 - 停止を解除\n' +
     '「状態」 - 稼働状況とAPI呼び出し回数を確認\n\n' +
-    '新しい請求書/見積書/納品書を検出すると自動で通知します。\n\n' +
-    `🔍<code>受信テキスト: ${text}</code>\n<code>文字コード: ${debugCodes}</code>`,
+    '新しい請求書/見積書/納品書を検出すると自動で通知します。',
+    chatId
+  );
+}
+
+/** メールを介さない請求書（郵送・口座引き落とし等）を手動でスプレッドシートに記録する */
+function handleManualRegister_(text, chatId, fromUser) {
+  const body = text.replace(/^(\/register|登録)\s*/, '').trim();
+
+  if (!body) {
+    tgSendMessage(
+      '📝 メールに来ない請求書の手動登録です。\n\n' +
+      '「登録 会社名」の形で送ってください。\n' +
+      '例：「登録 〇〇オフィス」',
+      chatId
+    );
+    return;
+  }
+
+  const vendorName = body;
+  const yyyymm = targetMonthFrom_(null); // 今月
+  const docId = 'manual_' + md5Hex_(`${vendorName}|${yyyymm}|${Date.now()}`).substring(0, 10);
+
+  const row = {
+    '書類ID': docId,
+    '案件ID': '',
+    '検出日時': nowIso_(),
+    '対象月': yyyymm,
+    '発行日': '',
+    '取引先名': vendorName,
+    '書類種別': '請求書',
+    '金額(税込)': '',
+    '金額(税抜)': '',
+    '支払期日': '',
+    '請求書番号': '',
+    'インボイス登録番号': '',
+    'Gmailメッセージ ID': '',
+    '添付ファイル名': '(メール以外・手動登録)',
+    '見積書有無': 'TRUE',
+    '納品書有無': 'TRUE',
+    '請求書有無': 'TRUE',
+    '支払対象': PAYABLE_YES,
+    'ステータス': STATUS_APPROVED,
+    '承認者': fromUser || 'unknown',
+    '承認日時': nowIso_(),
+    '備考': 'メールに来ない請求書パターン（手動登録・金額未入力）',
+  };
+  upsertInvoice(row);
+
+  tgSendMessage(
+    `✅ 手動登録しました\n\n取引先: ${vendorName}\n対象月: ${yyyymm}\n書類ID: <code>${docId}</code>\n\n` +
+    '金額が分かったら、スプレッドシート「請求書ログ」の該当行に直接入力してください。\n' +
+    '固定支払い先マスタにも登録しておくと、来月以降うっかり忘れたときに教えてくれます。',
     chatId
   );
 }

@@ -2,7 +2,7 @@
  * 請求書集計システム(Google Apps Script版) - 全部入り1ファイル版
  * 
  * このファイル1つを Apps Script の Code.gs にまるごと貼り付けるだけでOKです。
- * (中身は Config/SheetsService/GmailService/ClaudeService/Matcher/TelegramService/Main/WebhookHandler/Triggers を結合したもの)
+ * (中身は Config/SafetyGuard/SheetsService/GmailService/ClaudeService/Matcher/TelegramService/Main/WebhookHandler/Triggers を結合したもの)
  */
 
 
@@ -63,6 +63,9 @@ const CONFIG = {
   get CONFIRMATION_REMINDER_DAY() { return Number(getProp('CONFIRMATION_REMINDER_DAY', '15')); },
   get CONFIRMATION_DEADLINE_DAY() { return Number(getProp('CONFIRMATION_DEADLINE_DAY', '20')); },
   get MAX_MESSAGES_PER_SCAN() { return Number(getProp('MAX_MESSAGES_PER_SCAN', '30')); },
+  // ===== 暴走防止 =====
+  get DAILY_CLAUDE_CALL_LIMIT() { return Number(getProp('DAILY_CLAUDE_CALL_LIMIT', '50')); },
+  get MAX_NEW_DOCS_PER_RUN() { return Number(getProp('MAX_NEW_DOCS_PER_RUN', '20')); },
 };
 
 // ステータス値
@@ -100,6 +103,90 @@ const SUMMARY_HEADERS = [
   '3点セット未完了件数', '固定支払い先の未着', '未承認件数', '最終確認',
 ];
 const SUMMARY_TEXT_COLUMNS = [1, 2]; // 対象月, 集計日時
+
+// ============================================================
+// ファイル: SafetyGuard.gs
+// ============================================================
+/**
+ * 暴走防止・API呼び出し上限（Apps Script版）
+ *
+ * - 緊急停止スイッチ：Telegramで「停止」と送るといつでも即座に全処理を止められる
+ * - 1日あたりのClaude API呼び出し上限：DAILY_CLAUDE_CALL_LIMIT（既定50回/日）を超えたら自動停止
+ * - 1回の実行あたりの処理件数上限：MAX_NEW_DOCS_PER_RUN（既定20件）で単発の暴走も抑える
+ *
+ * 想定利用量（月11〜30件×3点セット≒最大90件/月）に対して十分余裕を持たせつつ、
+ * バグでGmail検索条件が意図せず広くヒットした場合などの被害を最小限にする。
+ */
+
+function isSystemPaused_() {
+  return getProp('SYSTEM_PAUSED', 'FALSE').toUpperCase() === 'TRUE';
+}
+
+function pauseSystem_(reason) {
+  setProp('SYSTEM_PAUSED', 'TRUE');
+  Logger.log('🛑 システムを一時停止しました: ' + (reason || ''));
+}
+
+function resumeSystem_() {
+  setProp('SYSTEM_PAUSED', 'FALSE');
+  Logger.log('▶️ システムを再開しました');
+}
+
+function todayKey_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function getClaudeCallCountToday_() {
+  return Number(getProp('claude_calls_' + todayKey_(), '0'));
+}
+
+/**
+ * Claude API呼び出し直前に必ず通す関門。
+ * 上限に達していなければカウントを1つ消費してtrueを返す。達していればfalseを返す（呼び出し禁止）。
+ */
+function tryConsumeClaudeQuota_() {
+  const limit = CONFIG.DAILY_CLAUDE_CALL_LIMIT;
+  const key = 'claude_calls_' + todayKey_();
+  const count = Number(getProp(key, '0'));
+
+  if (count >= limit) return false;
+
+  setProp(key, String(count + 1));
+  return true;
+}
+
+/** 同じ日に何度も同じ通知を送らないようにするための重複防止付き通知 */
+function notifyOncePerDay_(flagKey, text) {
+  const key = flagKey + '_' + todayKey_();
+  if (getProp(key, 'FALSE') === 'TRUE') return;
+  setProp(key, 'TRUE');
+  tgSendMessage(text);
+}
+
+function notifyQuotaExceeded_() {
+  notifyOncePerDay_(
+    'quota_notified',
+    `🛑 <b>本日のClaude API呼び出し上限（${CONFIG.DAILY_CLAUDE_CALL_LIMIT}回）に達しました</b>\n\n` +
+    '安全のため、これ以上の新規書類の読み取りを一時停止しています。\n' +
+    '未処理分は明日また自動で処理されます。今すぐ再開したい場合は「再開」と送ってください\n' +
+    '（上限は スクリプト プロパティの DAILY_CLAUDE_CALL_LIMIT で変更できます）。'
+  );
+}
+
+/** 古い日次カウンタ・通知フラグを削除する（スクリプトプロパティの肥大化防止。毎日1回呼び出す想定） */
+function cleanupOldDailyCounters_() {
+  const props = PropertiesService.getScriptProperties();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffKey = Utilities.formatDate(cutoff, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+
+  props.getKeys().forEach(key => {
+    const m = key.match(/^(claude_calls_|quota_notified_)(\d{4}-\d{2}-\d{2})$/);
+    if (m && m[2] < cutoffKey) {
+      props.deleteProperty(key);
+    }
+  });
+}
 
 // ============================================================
 // ファイル: SheetsService.gs
@@ -368,6 +455,13 @@ function searchPdfAttachments(query, maxThreads) {
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 
 function callClaude_(payload) {
+  // 暴走防止：1日あたりの呼び出し上限を超えていたら、実際のAPI通信をせずここで止める
+  if (!tryConsumeClaudeQuota_()) {
+    const err = new Error(`本日のClaude API呼び出し上限（${CONFIG.DAILY_CLAUDE_CALL_LIMIT}回）に達しました`);
+    err.isQuotaError = true;
+    throw err;
+  }
+
   const response = UrlFetchApp.fetch(CLAUDE_API_URL, {
     method: 'post',
     contentType: 'application/json',
@@ -470,6 +564,7 @@ function extractInvoiceFromPdf(pdfBlob, filename) {
     data.filename = filename;
     return data;
   } catch (e) {
+    if (e && e.isQuotaError) throw e; // 上限超過は呼び出し元(processNewDocuments)で処理を止めるため再スロー
     Logger.log('Claude 抽出エラー: ' + e);
     return emptyExtractResult_(filename, '抽出失敗: ' + e + '（要目視確認）');
   }
@@ -501,6 +596,7 @@ ${modificationText}
     data.filename = currentData.filename || '';
     return data;
   } catch (e) {
+    if (e && e.isQuotaError) throw e; // 上限超過は呼び出し元(applyCorrection_)で処理を止めるため再スロー
     Logger.log('Claude 修正エラー: ' + e);
     return currentData;
   }
@@ -868,28 +964,58 @@ const PAYABLE_REVERSE_MAP = (() => {
 
 /** Gmailを検索し、未処理のPDF添付を抽出・Sheets記録・Telegram通知する（メインの定期実行関数） */
 function processNewDocuments() {
+  if (isSystemPaused_()) {
+    Logger.log('🛑 システムは一時停止中のためスキップします（Telegramで「再開」と送ると復帰します）');
+    return 0;
+  }
+
   Logger.log('🔍 請求書メールをスキャン中...');
   const mailItems = searchPdfAttachments(CONFIG.GMAIL_QUERY, CONFIG.MAX_MESSAGES_PER_SCAN);
 
   let newCount = 0;
+  let quotaHit = false;
   const touchedMonths = new Set();
 
-  mailItems.forEach(item => {
-    item.attachments.forEach(att => {
+  outerLoop:
+  for (let i = 0; i < mailItems.length; i++) {
+    const item = mailItems[i];
+    for (let j = 0; j < item.attachments.length; j++) {
+      const att = item.attachments[j];
       const docId = makeDocId_(item.msgId, att.filename);
-      if (findInvoiceRow_(docId)) return; // 既に処理済み
+      if (findInvoiceRow_(docId)) continue; // 既に処理済み
 
-      const extracted = extractInvoiceFromPdf(att.blob, att.filename);
+      // 暴走防止：1回の実行での処理件数に上限を設ける（残りは次回の実行に持ち越す）
+      if (newCount >= CONFIG.MAX_NEW_DOCS_PER_RUN) {
+        Logger.log(`⚠️ 1回の実行での処理上限（${CONFIG.MAX_NEW_DOCS_PER_RUN}件）に達したため、残りは次回に持ち越します`);
+        break outerLoop;
+      }
+
+      let extracted;
+      try {
+        extracted = extractInvoiceFromPdf(att.blob, att.filename);
+      } catch (e) {
+        if (e && e.isQuotaError) {
+          quotaHit = true;
+          break outerLoop; // このドキュメントは未処理のまま残し、次回（明日以降）に再試行させる
+        }
+        throw e;
+      }
+
       const row = buildInvoiceRow_(docId, item, att.filename, extracted);
       upsertInvoice(row);
       newCount++;
       touchedMonths.add(row['対象月']);
 
       notifyNewDocument_(row, extracted);
-    });
-  });
+    }
+  }
 
   touchedMonths.forEach(month => regroupCases_(month));
+
+  if (quotaHit) {
+    Logger.log('🛑 本日のClaude API呼び出し上限に達したため処理を中断しました');
+    notifyQuotaExceeded_();
+  }
 
   Logger.log(newCount ? `✅ 新規${newCount}件の書類を処理しました` : '   新規の書類はありませんでした');
   return newCount;
@@ -1211,12 +1337,42 @@ function handleMessage_(event) {
     return;
   }
 
+  if (text === '停止' || text === '/pause') {
+    pauseSystem_('ユーザーからの手動停止');
+    tgSendMessage(
+      '🛑 システムを一時停止しました。\nGmail監視・Claude API呼び出しをすべて止めています。\n再開するには「再開」と送ってください。',
+      chatId
+    );
+    return;
+  }
+
+  if (text === '再開' || text === '/resume') {
+    resumeSystem_();
+    tgSendMessage('▶️ システムを再開しました。', chatId);
+    return;
+  }
+
+  if (text === '状態' || text === '/status') {
+    const paused = isSystemPaused_();
+    const callCount = getClaudeCallCountToday_();
+    tgSendMessage(
+      `📊 稼働状況\n\n` +
+      `状態: ${paused ? '🛑 停止中' : '▶️ 稼働中'}\n` +
+      `本日のClaude API呼び出し: ${callCount} / ${CONFIG.DAILY_CLAUDE_CALL_LIMIT}回`,
+      chatId
+    );
+    return;
+  }
+
   tgSendMessage(
     '📧 請求書集計システム\n\n' +
     'コマンド:\n' +
     '「一覧」 - 未承認/要確認の書類一覧\n' +
     '「集計 [YYYY-MM]」 - 月次集計を実行（省略時は先月分）\n' +
-    '「スキャン」 - Gmailを今すぐ確認\n\n' +
+    '「スキャン」 - Gmailを今すぐ確認\n' +
+    '「停止」 - 緊急停止（Gmail監視・API呼び出しを全部止める）\n' +
+    '「再開」 - 停止を解除\n' +
+    '「状態」 - 稼働状況とAPI呼び出し回数を確認\n\n' +
     '新しい請求書/見積書/納品書を検出すると自動で通知します。',
     chatId
   );
@@ -1230,7 +1386,21 @@ function applyCorrection_(docId, modificationText, chatId) {
     return;
   }
 
-  const revised = reviseInvoiceData(rowToExtracted_(current), modificationText);
+  let revised;
+  try {
+    revised = reviseInvoiceData(rowToExtracted_(current), modificationText);
+  } catch (e) {
+    if (e && e.isQuotaError) {
+      tgSendMessage(
+        '🛑 本日のClaude API呼び出し上限に達しているため、今は修正できません。\n' +
+        '明日また試すか、「再開」と送って手動で再開してください。',
+        chatId
+      );
+      return;
+    }
+    tgSendMessage('修正処理中にエラーが発生しました: ' + e, chatId);
+    return;
+  }
 
   const updates = {
     '取引先名': revised.vendor_name || current['取引先名'],
@@ -1328,6 +1498,8 @@ function deleteAllTriggers_() {
  * - CONFIRMATION_DEADLINE_DAY（既定20日）: 未確認なら期限アラート
  */
 function dailyScheduleCheck() {
+  cleanupOldDailyCounters_(); // 暴走防止用の日次カウンタ等の掃除（肥大化防止）
+
   const today = new Date();
   const day = today.getDate();
   const yyyymm = previousMonthStr_(today);

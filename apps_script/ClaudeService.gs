@@ -8,6 +8,13 @@
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 
 function callClaude_(payload) {
+  // 暴走防止：1日あたりの呼び出し上限を超えていたら、実際のAPI通信をせずここで止める
+  if (!tryConsumeClaudeQuota_()) {
+    const err = new Error(`本日のClaude API呼び出し上限（${CONFIG.DAILY_CLAUDE_CALL_LIMIT}回）に達しました`);
+    err.isQuotaError = true;
+    throw err;
+  }
+
   const response = UrlFetchApp.fetch(CLAUDE_API_URL, {
     method: 'post',
     contentType: 'application/json',
@@ -110,6 +117,7 @@ function extractInvoiceFromPdf(pdfBlob, filename) {
     data.filename = filename;
     return data;
   } catch (e) {
+    if (e && e.isQuotaError) throw e; // 上限超過は呼び出し元(processNewDocuments)で処理を止めるため再スロー
     Logger.log('Claude 抽出エラー: ' + e);
     return emptyExtractResult_(filename, '抽出失敗: ' + e + '（要目視確認）');
   }
@@ -141,6 +149,7 @@ ${modificationText}
     data.filename = currentData.filename || '';
     return data;
   } catch (e) {
+    if (e && e.isQuotaError) throw e; // 上限超過は呼び出し元(applyCorrection_)で処理を止めるため再スロー
     Logger.log('Claude 修正エラー: ' + e);
     return currentData;
   }

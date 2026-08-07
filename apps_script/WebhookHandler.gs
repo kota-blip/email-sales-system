@@ -126,12 +126,42 @@ function handleMessage_(event) {
     return;
   }
 
+  if (text === '停止' || text === '/pause') {
+    pauseSystem_('ユーザーからの手動停止');
+    tgSendMessage(
+      '🛑 システムを一時停止しました。\nGmail監視・Claude API呼び出しをすべて止めています。\n再開するには「再開」と送ってください。',
+      chatId
+    );
+    return;
+  }
+
+  if (text === '再開' || text === '/resume') {
+    resumeSystem_();
+    tgSendMessage('▶️ システムを再開しました。', chatId);
+    return;
+  }
+
+  if (text === '状態' || text === '/status') {
+    const paused = isSystemPaused_();
+    const callCount = getClaudeCallCountToday_();
+    tgSendMessage(
+      `📊 稼働状況\n\n` +
+      `状態: ${paused ? '🛑 停止中' : '▶️ 稼働中'}\n` +
+      `本日のClaude API呼び出し: ${callCount} / ${CONFIG.DAILY_CLAUDE_CALL_LIMIT}回`,
+      chatId
+    );
+    return;
+  }
+
   tgSendMessage(
     '📧 請求書集計システム\n\n' +
     'コマンド:\n' +
     '「一覧」 - 未承認/要確認の書類一覧\n' +
     '「集計 [YYYY-MM]」 - 月次集計を実行（省略時は先月分）\n' +
-    '「スキャン」 - Gmailを今すぐ確認\n\n' +
+    '「スキャン」 - Gmailを今すぐ確認\n' +
+    '「停止」 - 緊急停止（Gmail監視・API呼び出しを全部止める）\n' +
+    '「再開」 - 停止を解除\n' +
+    '「状態」 - 稼働状況とAPI呼び出し回数を確認\n\n' +
     '新しい請求書/見積書/納品書を検出すると自動で通知します。',
     chatId
   );
@@ -145,7 +175,21 @@ function applyCorrection_(docId, modificationText, chatId) {
     return;
   }
 
-  const revised = reviseInvoiceData(rowToExtracted_(current), modificationText);
+  let revised;
+  try {
+    revised = reviseInvoiceData(rowToExtracted_(current), modificationText);
+  } catch (e) {
+    if (e && e.isQuotaError) {
+      tgSendMessage(
+        '🛑 本日のClaude API呼び出し上限に達しているため、今は修正できません。\n' +
+        '明日また試すか、「再開」と送って手動で再開してください。',
+        chatId
+      );
+      return;
+    }
+    tgSendMessage('修正処理中にエラーが発生しました: ' + e, chatId);
+    return;
+  }
 
   const updates = {
     '取引先名': revised.vendor_name || current['取引先名'],

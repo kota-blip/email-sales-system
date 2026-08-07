@@ -51,6 +51,8 @@ function deleteAllTriggers_() {
  * - CONFIRMATION_DEADLINE_DAY（既定20日）: 未確認なら期限アラート
  */
 function dailyScheduleCheck() {
+  cleanupOldDailyCounters_(); // 暴走防止用の日次カウンタ等の掃除（肥大化防止）
+
   const today = new Date();
   const day = today.getDate();
   const yyyymm = previousMonthStr_(today);

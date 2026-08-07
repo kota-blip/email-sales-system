@@ -52,6 +52,9 @@ const CONFIG = {
   get CONFIRMATION_REMINDER_DAY() { return Number(getProp('CONFIRMATION_REMINDER_DAY', '15')); },
   get CONFIRMATION_DEADLINE_DAY() { return Number(getProp('CONFIRMATION_DEADLINE_DAY', '20')); },
   get MAX_MESSAGES_PER_SCAN() { return Number(getProp('MAX_MESSAGES_PER_SCAN', '30')); },
+  // ===== 暴走防止 =====
+  get DAILY_CLAUDE_CALL_LIMIT() { return Number(getProp('DAILY_CLAUDE_CALL_LIMIT', '50')); },
+  get MAX_NEW_DOCS_PER_RUN() { return Number(getProp('MAX_NEW_DOCS_PER_RUN', '20')); },
 };
 
 // ステータス値

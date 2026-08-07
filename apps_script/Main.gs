@@ -68,28 +68,58 @@ const PAYABLE_REVERSE_MAP = (() => {
 
 /** Gmailを検索し、未処理のPDF添付を抽出・Sheets記録・Telegram通知する（メインの定期実行関数） */
 function processNewDocuments() {
+  if (isSystemPaused_()) {
+    Logger.log('🛑 システムは一時停止中のためスキップします（Telegramで「再開」と送ると復帰します）');
+    return 0;
+  }
+
   Logger.log('🔍 請求書メールをスキャン中...');
   const mailItems = searchPdfAttachments(CONFIG.GMAIL_QUERY, CONFIG.MAX_MESSAGES_PER_SCAN);
 
   let newCount = 0;
+  let quotaHit = false;
   const touchedMonths = new Set();
 
-  mailItems.forEach(item => {
-    item.attachments.forEach(att => {
+  outerLoop:
+  for (let i = 0; i < mailItems.length; i++) {
+    const item = mailItems[i];
+    for (let j = 0; j < item.attachments.length; j++) {
+      const att = item.attachments[j];
       const docId = makeDocId_(item.msgId, att.filename);
-      if (findInvoiceRow_(docId)) return; // 既に処理済み
+      if (findInvoiceRow_(docId)) continue; // 既に処理済み
 
-      const extracted = extractInvoiceFromPdf(att.blob, att.filename);
+      // 暴走防止：1回の実行での処理件数に上限を設ける（残りは次回の実行に持ち越す）
+      if (newCount >= CONFIG.MAX_NEW_DOCS_PER_RUN) {
+        Logger.log(`⚠️ 1回の実行での処理上限（${CONFIG.MAX_NEW_DOCS_PER_RUN}件）に達したため、残りは次回に持ち越します`);
+        break outerLoop;
+      }
+
+      let extracted;
+      try {
+        extracted = extractInvoiceFromPdf(att.blob, att.filename);
+      } catch (e) {
+        if (e && e.isQuotaError) {
+          quotaHit = true;
+          break outerLoop; // このドキュメントは未処理のまま残し、次回（明日以降）に再試行させる
+        }
+        throw e;
+      }
+
       const row = buildInvoiceRow_(docId, item, att.filename, extracted);
       upsertInvoice(row);
       newCount++;
       touchedMonths.add(row['対象月']);
 
       notifyNewDocument_(row, extracted);
-    });
-  });
+    }
+  }
 
   touchedMonths.forEach(month => regroupCases_(month));
+
+  if (quotaHit) {
+    Logger.log('🛑 本日のClaude API呼び出し上限に達したため処理を中断しました');
+    notifyQuotaExceeded_();
+  }
 
   Logger.log(newCount ? `✅ 新規${newCount}件の書類を処理しました` : '   新規の書類はありませんでした');
   return newCount;

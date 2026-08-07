@@ -82,11 +82,13 @@ function tgClearKeyboard(chatId, messageId) {
 }
 
 function tgSetWebhook(url) {
-  return tgCall_('setWebhook', { url: url });
+  // drop_pending_updates: getUpdates(offsetで確認応答しない使い方)などで溜まった
+  // 未処理の古いメッセージを、Webhook登録と同時に破棄する（渋滞防止）
+  return tgCall_('setWebhook', { url: url, drop_pending_updates: true });
 }
 
 function tgDeleteWebhook() {
-  return tgCall_('deleteWebhook', {});
+  return tgCall_('deleteWebhook', { drop_pending_updates: true });
 }
 
 /** Telegramのupdate JSONを扱いやすい形に変換する */

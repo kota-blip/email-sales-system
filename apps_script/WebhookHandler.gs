@@ -90,6 +90,11 @@ function handleCallback_(event) {
 function handleMessage_(event) {
   const chatId = event.chatId;
   const text = (event.text || '').trim();
+  // 前後の見えない文字・全角空白等の影響を受けにくくするため、比較用に空白類を除去した文字列も用意する
+  // 　=全角スペース, ​-‍=ゼロ幅系文字, ﻿=BOM/ゼロ幅ノーブレークスペース
+  const normalized = text.replace(/[\s\u3000\u200B-\u200D\uFEFF]+/g, '');
+
+  Logger.log(`受信メッセージ: chatId=${chatId} text=${JSON.stringify(text)}`);
 
   // 修正待ち状態なら、これを修正指示として処理する
   const awaitingDocId = popAwaitingCorrection_(chatId);
@@ -98,7 +103,7 @@ function handleMessage_(event) {
     return;
   }
 
-  if (text.indexOf('/集計') === 0 || text.indexOf('集計') === 0 || text.indexOf('/monthly') === 0) {
+  if (normalized.indexOf('集計') === 0 || normalized.indexOf('/集計') === 0 || normalized.indexOf('/monthly') === 0) {
     const parts = text.split(/\s+/);
     const yyyymm = parts[1] || previousMonthStr_();
     tgSendMessage(`🔄 ${yyyymm} の集計を実行します...`, chatId);
@@ -106,7 +111,7 @@ function handleMessage_(event) {
     return;
   }
 
-  if (text === '一覧' || text === '/list') {
+  if (normalized === '一覧' || normalized === '/list') {
     const pending = getPendingInvoices();
     if (!pending.length) {
       tgSendMessage('未承認/要確認の書類はありません', chatId);
@@ -120,13 +125,13 @@ function handleMessage_(event) {
     return;
   }
 
-  if (text === '/scan' || text === 'スキャン') {
+  if (normalized === '/scan' || normalized.indexOf('スキャン') !== -1) {
     tgSendMessage('🔄 Gmailをスキャンします...', chatId);
     processNewDocuments();
     return;
   }
 
-  if (text === '停止' || text === '/pause') {
+  if (normalized === '停止' || normalized === '/pause') {
     pauseSystem_('ユーザーからの手動停止');
     tgSendMessage(
       '🛑 システムを一時停止しました。\nGmail監視・Claude API呼び出しをすべて止めています。\n再開するには「再開」と送ってください。',
@@ -135,13 +140,13 @@ function handleMessage_(event) {
     return;
   }
 
-  if (text === '再開' || text === '/resume') {
+  if (normalized === '再開' || normalized === '/resume') {
     resumeSystem_();
     tgSendMessage('▶️ システムを再開しました。', chatId);
     return;
   }
 
-  if (text === '状態' || text === '/status') {
+  if (normalized === '状態' || normalized === '/status') {
     const paused = isSystemPaused_();
     const callCount = getClaudeCallCountToday_();
     tgSendMessage(

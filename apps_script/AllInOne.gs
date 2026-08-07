@@ -1469,14 +1469,17 @@ function runMonthlyReportForPreviousMonth_() {
 function initialSetup() {
   initializeSpreadsheet();
   setupTriggers();
-  const ui = (typeof SpreadsheetApp !== 'undefined') ? SpreadsheetApp.getUi() : null;
   const message =
     '初期セットアップ完了！\n\n' +
     '次に「デプロイ」→「新しいデプロイ」→「ウェブアプリ」で公開し、\n' +
     'そのあと「🔗 Telegram Webhookを再設定」（=setTelegramWebhookToThisApp）を実行してください。';
   Logger.log(message);
-  if (ui) {
-    try { ui.alert(message); } catch (e) { /* メニュー経由でない場合はUIが無いため無視 */ }
+  // SpreadsheetApp.getUi() はスプレッドシートのメニュー経由で呼んだときしか使えず、
+  // エディタから直接実行した場合は呼び出し自体が例外になるため丸ごとtry/catchする
+  try {
+    SpreadsheetApp.getUi().alert(message);
+  } catch (e) {
+    // エディタから直接実行した場合はここに来る（実行ログにメッセージが出ていればOK）
   }
 }
 

@@ -57,6 +57,7 @@ Google Driveで新しいGoogleスプレッドシートを作成し、名前を�
 | `OWN_COMPANY_NAME` | 任意 | 自社名（支払対象アラートの精度向上用） |
 | `CLAUDE_MODEL` | 任意 | デフォルト `claude-3-5-sonnet-20241022` |
 | `SPREADSHEET_ID` | 任意 | 空でOK（コンテナバインドなら自動でこのシートを使う） |
+| `WEB_APP_URL` | 手順7で必須 | ウェブアプリ公開後に取得する `/exec` URL（Telegram Webhook登録に使用） |
 | `INVOICE_GMAIL_QUERY` | 任意 | Gmail検索クエリを変えたい場合 |
 | `INVOICE_MATCH_WINDOW_DAYS` | 任意 | デフォルト `60` |
 | `INVOICE_MATCH_AMOUNT_TOLERANCE` | 任意 | デフォルト `0.15` |
@@ -81,14 +82,24 @@ Google Driveで新しいGoogleスプレッドシートを作成し、名前を�
 1. エディタ右上の「デプロイ」→「新しいデプロイ」
 2. 種類の選択（歯車アイコン）で「ウェブアプリ」を選択
 3. 「アクセスできるユーザー」を **「全員」** に設定（Telegramのサーバーからアクセスできるようにするため）
-4. 「デプロイ」をクリックし、発行された **ウェブアプリURL** をコピー
+4. 「デプロイ」をクリックし、発行された **ウェブアプリURL**（`/exec` で終わるもの）をコピー
+
+> ⚠️ 「デプロイ」直後の画面に出るURLではなく、必ず「デプロイ」→「デプロイを管理」からも確認できる、
+> `/exec` で終わるURLを使ってください。`/dev` で終わるURLをTelegramに登録すると、
+> Telegram側から接続する際に **401エラー** になり、通知が届きません（Apps Script側の既知のクセです）。
 
 ### 7. TelegramのWebhookを登録する
 
-関数選択プルダウンで `setTelegramWebhookToThisApp` を選んで実行します。
-（内部で手順6のURLを自動取得してTelegramに登録します）
+1. 手順6でコピーした `/exec` URLを、スクリプト プロパティに `WEB_APP_URL` として追加する
+   （歯車アイコン「プロジェクトの設定」→「スクリプト プロパティ」）
+2. 関数選択プルダウンで `setTelegramWebhookToThisApp` を選んで実行
 
-実行ログ（表示 → 実行ログ）に `"ok":true` と出れば成功です。
+実行ログに `"ok":true` と出れば成功です。念のため、ブラウザで以下を開いて
+`"url"` が `/exec` で終わっていること、`"last_error_message"` が出ていないことを確認すると確実です。
+
+```
+https://api.telegram.org/bot<あなたのBotトークン>/getWebhookInfo
+```
 
 ### 8. 固定支払い先マスタを入力
 

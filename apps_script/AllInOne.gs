@@ -1526,9 +1526,22 @@ function dailyScheduleCheck() {
 
 /** 初回セットアップ用：Telegram Webhookを、このプロジェクトのウェブアプリURLに登録する */
 function setTelegramWebhookToThisApp() {
-  const url = ScriptApp.getService().getUrl();
+  // ScriptApp.getService().getUrl() はエディタから手動実行すると /dev URL（開発用、Telegramからは
+  // 401になる）を返してしまう既知のクセがあるため使わない。「デプロイを管理」に表示される
+  // /exec で終わる本番URLを、あらかじめスクリプトプロパティ WEB_APP_URL に設定しておく方式にする。
+  const url = getProp('WEB_APP_URL', null);
   if (!url) {
-    throw new Error('先に「デプロイ」→「新しいデプロイ」→「ウェブアプリ」でこのプロジェクトを公開してください。');
+    throw new Error(
+      'スクリプトプロパティ "WEB_APP_URL" が未設定です。' +
+      '「デプロイ」→「デプロイを管理」に表示される、/exec で終わるウェブアプリのURLをコピーし、' +
+      'プロジェクトの設定 → スクリプト プロパティ に WEB_APP_URL として追加してから、もう一度実行してください。'
+    );
+  }
+  if (url.indexOf('/dev') !== -1) {
+    throw new Error(
+      'WEB_APP_URL が /dev で終わる開発用URLになっています。Telegramからは接続できません。' +
+      '「デプロイを管理」画面に表示される /exec で終わる本番URLに直してください。'
+    );
   }
   const result = tgSetWebhook(url);
   Logger.log('setWebhook result: ' + JSON.stringify(result));

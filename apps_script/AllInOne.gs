@@ -1369,6 +1369,7 @@ function handleMessage_(event) {
     return;
   }
 
+  const debugCodes = Array.from(text).map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(' ');
   tgSendMessage(
     '📧 請求書集計システム\n\n' +
     'コマンド:\n' +
@@ -1378,7 +1379,8 @@ function handleMessage_(event) {
     '「停止」 - 緊急停止（Gmail監視・API呼び出しを全部止める）\n' +
     '「再開」 - 停止を解除\n' +
     '「状態」 - 稼働状況とAPI呼び出し回数を確認\n\n' +
-    '新しい請求書/見積書/納品書を検出すると自動で通知します。',
+    '新しい請求書/見積書/納品書を検出すると自動で通知します。\n\n' +
+    `🔍<code>受信テキスト: ${text}</code>\n<code>文字コード: ${debugCodes}</code>`,
     chatId
   );
 }

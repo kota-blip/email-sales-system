@@ -58,7 +58,7 @@ Google Driveで新しいGoogleスプレッドシートを作成し、名前を�
 | `CLAUDE_MODEL` | 任意 | デフォルト `claude-3-5-sonnet-20241022` |
 | `SPREADSHEET_ID` | 任意 | 空でOK（コンテナバインドなら自動でこのシートを使う） |
 | `WEB_APP_URL` | 手順7で必須 | ウェブアプリ公開後に取得する `/exec` URL（Telegram Webhook登録に使用） |
-| `INVOICE_GMAIL_QUERY` | 任意 | Gmail検索クエリを変えたい場合 |
+| `INVOICE_GMAIL_QUERY` | 任意 | デフォルト `has:attachment filename:pdf newer_than:45d`（キーワード縛りなし。関係ないPDFが多すぎる場合のみ絞り込みを追加） |
 | `INVOICE_MATCH_WINDOW_DAYS` | 任意 | デフォルト `60` |
 | `INVOICE_MATCH_AMOUNT_TOLERANCE` | 任意 | デフォルト `0.15` |
 | `REPORT_AUTO_TRIGGER_DAY` | 任意 | デフォルト `10`（毎月この日ごろに前月分を自動集計） |

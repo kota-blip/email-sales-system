@@ -52,10 +52,9 @@ const CONFIG = {
   get OWN_COMPANY_NAME() { return getProp('OWN_COMPANY_NAME', ''); },
   get SPREADSHEET_ID() { return getProp('SPREADSHEET_ID', ''); },
   get GMAIL_QUERY() {
-    return getProp(
-      'INVOICE_GMAIL_QUERY',
-      'has:attachment filename:pdf newer_than:45d (請求書 OR invoice OR 見積書 OR 納品書 OR quotation OR delivery)'
-    );
+    // キーワード縛り（「請求書」等の文言が本文に無いと拾えない）は「漏れ」の原因になるため外し、
+    // PDF添付があるメールは広く拾う。実際に支払対象かどうかの判断はClaudeに任せる設計。
+    return getProp('INVOICE_GMAIL_QUERY', 'has:attachment filename:pdf newer_than:45d');
   },
   get MATCH_WINDOW_DAYS() { return Number(getProp('INVOICE_MATCH_WINDOW_DAYS', '60')); },
   get MATCH_AMOUNT_TOLERANCE() { return Number(getProp('INVOICE_MATCH_AMOUNT_TOLERANCE', '0.15')); },

@@ -56,10 +56,9 @@ class Config:
     # ===== 請求書集計システム =====
     INVOICE_CHECK_INTERVAL = int(_get_env("INVOICE_CHECK_INTERVAL", "3600"))  # 秒（デフォルト1時間ごと）
     INVOICE_WEBHOOK_PORT = int(_get_env("INVOICE_WEBHOOK_PORT", "5002"))
-    INVOICE_GMAIL_QUERY = _get_env(
-        "INVOICE_GMAIL_QUERY",
-        "has:attachment filename:pdf (請求書 OR invoice OR 見積書 OR 納品書 OR quotation OR delivery)",
-    )
+    # キーワード縛り（「請求書」等の文言が本文に無いと拾えない）は「漏れ」の原因になるため外し、
+    # PDF添付があるメールは広く拾う。実際に支払対象かどうかの判断はClaudeに任せる設計。
+    INVOICE_GMAIL_QUERY = _get_env("INVOICE_GMAIL_QUERY", "has:attachment filename:pdf")
     # 3点セット（見積書・納品書・請求書）を同一案件として紐付ける際の許容日数
     INVOICE_MATCH_WINDOW_DAYS = int(_get_env("INVOICE_MATCH_WINDOW_DAYS", "60"))
     # 金額が近いとみなす許容誤差（税抜/税込差異などを吸収するための割合）

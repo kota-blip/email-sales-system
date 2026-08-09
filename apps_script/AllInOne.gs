@@ -974,6 +974,11 @@ function processNewDocuments() {
   Logger.log('🔍 請求書メールをスキャン中...');
   const mailItems = searchPdfAttachments(CONFIG.GMAIL_QUERY, CONFIG.MAX_MESSAGES_PER_SCAN);
 
+  // 既存の書類IDと、その「読み取りに失敗しているか」を先に把握しておく。
+  // 過去に抽出失敗（旧モデルの404等）で塩漬けになった書類は、再スキャン時に読み直す。
+  const existingByDocId = {};
+  getAllInvoices().forEach(r => { existingByDocId[r['書類ID']] = r; });
+
   let newCount = 0;
   let quotaHit = false;
   const touchedMonths = new Set();
@@ -984,7 +989,10 @@ function processNewDocuments() {
     for (let j = 0; j < item.attachments.length; j++) {
       const att = item.attachments[j];
       const docId = makeDocId_(item.msgId, att.filename);
-      if (findInvoiceRow_(docId)) continue; // 既に処理済み
+      const existing = existingByDocId[docId];
+      // 既に処理済みで、かつ抽出に失敗していない（正常に読めている or 人が確定済み）ならスキップ。
+      // 抽出失敗のまま残っている書類は、モデル修正後などに読み直せるようスキップしない。
+      if (existing && !isFailedExtractionRow_(existing)) continue;
 
       // 暴走防止：1回の実行での処理件数に上限を設ける（残りは次回の実行に持ち越す）
       if (newCount >= CONFIG.MAX_NEW_DOCS_PER_RUN) {
@@ -1021,6 +1029,15 @@ function processNewDocuments() {
 
   Logger.log(newCount ? `✅ 新規${newCount}件の書類を処理しました` : '   新規の書類はありませんでした');
   return newCount;
+}
+
+/** 既存の請求書ログ行が「抽出に失敗したまま」かどうかを判定する（再スキャン時の読み直し対象か） */
+function isFailedExtractionRow_(row) {
+  const note = String(row['備考'] || '');
+  if (note.indexOf('抽出失敗') !== -1 || note.indexOf('本文取得失敗') !== -1) return true;
+  // 種別も取引先も不明のまま（読み取れていない）行も、念のため読み直し対象にする
+  if (row['書類種別'] === '不明' && (row['取引先名'] === '(取引先不明)' || !row['取引先名'])) return true;
+  return false;
 }
 
 function buildInvoiceRow_(docId, mailItem, filename, extracted) {

@@ -33,7 +33,8 @@ class Config:
 
     # ===== Claude API =====
     CLAUDE_API_KEY = _get_env("CLAUDE_API_KEY")
-    CLAUDE_MODEL = _get_env("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+    # claude-3-5-sonnet-20241022 は提供終了によりAPIが404を返すため、最新モデルに変更
+    CLAUDE_MODEL = _get_env("CLAUDE_MODEL", "claude-sonnet-5")
 
     # ===== Telegram API（請求書集計システムの通知・承認用） =====
     TELEGRAM_BOT_TOKEN = _get_env("TELEGRAM_BOT_TOKEN")

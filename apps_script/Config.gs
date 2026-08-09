@@ -37,7 +37,8 @@ const CONFIG = {
   get TELEGRAM_BOT_TOKEN() { return requireProp_('TELEGRAM_BOT_TOKEN'); },
   get TELEGRAM_CHAT_ID() { return requireProp_('TELEGRAM_CHAT_ID'); },
   get CLAUDE_API_KEY() { return requireProp_('CLAUDE_API_KEY'); },
-  get CLAUDE_MODEL() { return getProp('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022'); },
+  // claude-3-5-sonnet-20241022 は提供終了によりAPIが404を返すため、最新モデルに変更
+  get CLAUDE_MODEL() { return getProp('CLAUDE_MODEL', 'claude-sonnet-5'); },
   get OWN_COMPANY_NAME() { return getProp('OWN_COMPANY_NAME', ''); },
   get SPREADSHEET_ID() { return getProp('SPREADSHEET_ID', ''); },
   get GMAIL_QUERY() {

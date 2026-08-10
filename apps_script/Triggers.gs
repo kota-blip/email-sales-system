@@ -50,21 +50,19 @@ function setupTriggers() {
  * ウェブアプリの公開・URL登録・「全員に公開」が一切不要になる。
  */
 function switchToPollingMode() {
-  const del = tgDeleteWebhook(); // Webhookを解除しないとgetUpdatesは使えない
-  Logger.log('deleteWebhook result: ' + JSON.stringify(del));
-
-  // 既存のポーリングトリガーを消して作り直す（重複防止）
+  // まずネットワーク不要の処理（トリガー作成）を先に済ませる。
+  // これにより、後段のネットワーク処理が遅くても、受信トリガーは確実に作られる。
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'pollTelegramUpdates') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+  setProp('TG_OFFSET', '0'); // 溜まっていた古い更新は読み飛ばす
 
-  // 溜まっていた古い更新は読み飛ばして、これ以降の新着だけ処理する
-  setProp('TG_OFFSET', '0');
+  // 最後にWebhookを解除（getUpdatesと併用不可のため）。ネットワークが絡む処理はここだけ。
+  const del = tgDeleteWebhook();
+  Logger.log('deleteWebhook result: ' + JSON.stringify(del));
 
-  const msg = '📲 ポーリング方式に切り替えました。\n' +
-    '1分以内に、Telegramで送ったメッセージが処理されるようになります。\n' +
-    'ウェブアプリの公開やWebhook登録はもう不要です。';
+  const msg = '📲 ポーリング方式に切り替えました。1分以内に受信できるようになります。';
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }

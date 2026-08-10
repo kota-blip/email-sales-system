@@ -10,7 +10,7 @@ function onOpen() {
     .addItem('📊 月次集計を実行（先月分）', 'runMonthlyReportForPreviousMonth_')
     .addSeparator()
     .addItem('⚙️ 初期セットアップ（初回のみ）', 'initialSetup')
-    .addItem('🔗 Telegram Webhookを再設定', 'setTelegramWebhookToThisApp')
+    .addItem('📲 Telegram受信をポーリング方式にする', 'switchToPollingMode')
     .addToUi();
 }
 
@@ -24,8 +24,8 @@ function initialSetup() {
   setupTriggers();
   const message =
     '初期セットアップ完了！\n\n' +
-    '次に「デプロイ」→「新しいデプロイ」→「ウェブアプリ」で公開し、\n' +
-    'そのあと「🔗 Telegram Webhookを再設定」（=setTelegramWebhookToThisApp）を実行してください。';
+    'Telegram受信はポーリング方式（毎分getUpdates）で動きます。ウェブアプリの公開は不要です。\n' +
+    'もしWebhookを使っていた場合は「📲 Telegram受信をポーリング方式にする」を一度実行してください。';
   Logger.log(message);
   // SpreadsheetApp.getUi() はスプレッドシートのメニュー経由で呼んだときしか使えず、
   // エディタから直接実行した場合は呼び出し自体が例外になるため丸ごとtry/catchする
@@ -40,7 +40,33 @@ function setupTriggers() {
   deleteAllTriggers_();
   ScriptApp.newTrigger('processNewDocuments').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('dailyScheduleCheck').timeBased().everyDays(1).atHour(9).create();
-  Logger.log('✅ トリガーを設定しました（毎時: Gmail監視 / 毎日9時ごろ: 月次スケジュールチェック）');
+  ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+  Logger.log('✅ トリガーを設定しました（毎時: Gmail監視 / 毎日9時: 月次 / 毎分: Telegram受信）');
+}
+
+/**
+ * Telegram受信をWebhook方式からポーリング方式に切り替える（Google Workspaceの302問題を回避）。
+ * Webhookを解除し、1分ごとにgetUpdatesで新着を取りに行くトリガーを設定する。
+ * ウェブアプリの公開・URL登録・「全員に公開」が一切不要になる。
+ */
+function switchToPollingMode() {
+  const del = tgDeleteWebhook(); // Webhookを解除しないとgetUpdatesは使えない
+  Logger.log('deleteWebhook result: ' + JSON.stringify(del));
+
+  // 既存のポーリングトリガーを消して作り直す（重複防止）
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'pollTelegramUpdates') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+
+  // 溜まっていた古い更新は読み飛ばして、これ以降の新着だけ処理する
+  setProp('TG_OFFSET', '0');
+
+  const msg = '📲 ポーリング方式に切り替えました。\n' +
+    '1分以内に、Telegramで送ったメッセージが処理されるようになります。\n' +
+    'ウェブアプリの公開やWebhook登録はもう不要です。';
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
 
 function deleteAllTriggers_() {

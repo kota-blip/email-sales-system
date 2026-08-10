@@ -91,6 +91,12 @@ function tgDeleteWebhook() {
   return tgCall_('deleteWebhook', { drop_pending_updates: true });
 }
 
+/** ポーリング方式で新着メッセージを取得する（Webhook不要。offset以降の未取得分を返す） */
+function tgGetUpdates(offset) {
+  const payload = { timeout: 0, offset: offset, allowed_updates: ['message', 'callback_query'] };
+  return tgCall_('getUpdates', payload);
+}
+
 /** Telegramのupdate JSONを扱いやすい形に変換する */
 function parseTelegramUpdate_(data) {
   if (data.callback_query) {

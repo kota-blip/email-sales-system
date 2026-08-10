@@ -61,6 +61,42 @@ function doGet(e) {
   return ContentService.createTextOutput('OK: 請求書集計システム稼働中 ' + nowIso_());
 }
 
+/**
+ * ポーリング方式のメッセージ処理（Webhook不要・Google Workspaceの302問題を回避）
+ * 時間主導トリガー（1分ごと）で実行し、Telegramの新着メッセージ・ボタン操作を処理する。
+ * doPost（Webhook）と同じ handleMessage_/handleCallback_ を再利用する。
+ */
+function pollTelegramUpdates() {
+  const offset = Number(getProp('TG_OFFSET', '0'));
+  const data = tgGetUpdates(offset);
+  if (!data || !data.ok || !data.result || !data.result.length) return;
+
+  let maxId = offset - 1;
+  data.result.forEach(update => {
+    if (update.update_id > maxId) maxId = update.update_id;
+
+    // 二重処理防止（トリガー重複起動などの保険）
+    if (isDuplicateTelegramUpdate_(update.update_id)) return;
+
+    try {
+      const event = parseTelegramUpdate_(update);
+      // 自動通知の宛先を自己修復（話しかけてきた相手を記憶）
+      if (event.chatId) rememberChatId_(event.chatId);
+
+      if (event.type === 'callback_query') {
+        handleCallback_(event);
+      } else if (event.type === 'message') {
+        handleMessage_(event);
+      }
+    } catch (e) {
+      Logger.log('ポーリング処理エラー: ' + e);
+    }
+  });
+
+  // 次回は処理済みの次から取得する（これがTelegram側への「受け取った」の合図になる）
+  setProp('TG_OFFSET', String(maxId + 1));
+}
+
 function setAwaitingCorrection_(chatId, docId) {
   PropertiesService.getScriptProperties().setProperty('awaiting_' + chatId, docId);
 }

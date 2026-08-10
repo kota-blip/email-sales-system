@@ -57,7 +57,7 @@ Google Driveで新しいGoogleスプレッドシートを作成し、名前を�
 | `OWN_COMPANY_NAME` | 任意 | 自社名（支払対象アラートの精度向上用） |
 | `CLAUDE_MODEL` | 任意 | デフォルト `claude-sonnet-5` |
 | `SPREADSHEET_ID` | 任意 | 空でOK（コンテナバインドなら自動でこのシートを使う） |
-| `WEB_APP_URL` | 手順7で必須 | ウェブアプリ公開後に取得する `/exec` URL（Telegram Webhook登録に使用） |
+| `WEB_APP_URL` | 不要 | （旧Webhook方式用。ポーリング方式では使いません） |
 | `INVOICE_GMAIL_QUERY` | 任意 | デフォルト `has:attachment filename:pdf newer_than:45d`（キーワード縛りなし。関係ないPDFが多すぎる場合のみ絞り込みを追加） |
 | `INVOICE_MATCH_WINDOW_DAYS` | 任意 | デフォルト `60` |
 | `INVOICE_MATCH_AMOUNT_TOLERANCE` | 任意 | デフォルト `0.15` |
@@ -77,29 +77,17 @@ Google Driveで新しいGoogleスプレッドシートを作成し、名前を�
 - 実行すると、スプレッドシートに「請求書ログ」「固定支払い先マスタ」「月次サマリ」の3タブが作成され、
   時間主導型トリガー（毎時のGmail監視、毎日9時ごろのスケジュールチェック）が設定されます
 
-### 6. ウェブアプリとして公開する（Telegramボタン操作を受け取るため）
+### 6. Telegram受信を有効にする（ポーリング方式）
 
-1. エディタ右上の「デプロイ」→「新しいデプロイ」
-2. 種類の選択（歯車アイコン）で「ウェブアプリ」を選択
-3. 「アクセスできるユーザー」を **「全員」** に設定（Telegramのサーバーからアクセスできるようにするため）
-4. 「デプロイ」をクリックし、発行された **ウェブアプリURL**（`/exec` で終わるもの）をコピー
+関数選択プルダウンで `switchToPollingMode` を選んで実行します。
 
-> ⚠️ 「デプロイ」直後の画面に出るURLではなく、必ず「デプロイ」→「デプロイを管理」からも確認できる、
-> `/exec` で終わるURLを使ってください。`/dev` で終わるURLをTelegramに登録すると、
-> Telegram側から接続する際に **401エラー** になり、通知が届きません（Apps Script側の既知のクセです）。
+これで、1分ごとに Apps Script が Telegram へ新着メッセージを取りに行くトリガーが設定されます。
+**ウェブアプリの公開・URL登録・「全員に公開」は一切不要です。**
 
-### 7. TelegramのWebhookを登録する
-
-1. 手順6でコピーした `/exec` URLを、スクリプト プロパティに `WEB_APP_URL` として追加する
-   （歯車アイコン「プロジェクトの設定」→「スクリプト プロパティ」）
-2. 関数選択プルダウンで `setTelegramWebhookToThisApp` を選んで実行
-
-実行ログに `"ok":true` と出れば成功です。念のため、ブラウザで以下を開いて
-`"url"` が `/exec` で終わっていること、`"last_error_message"` が出ていないことを確認すると確実です。
-
-```
-https://api.telegram.org/bot<あなたのBotトークン>/getWebhookInfo
-```
+> 💡 なぜウェブアプリ（Webhook）を使わないのか：
+> Google Workspace（法人）アカウントでは、「全員がアクセスできるウェブアプリ」の公開が
+> 組織ポリシーで制限され、Telegramからの接続が **302リダイレクト** になって不安定になりがちです。
+> ポーリング方式は外部公開が不要なため、この問題を根本的に回避できます。
 
 ### 8. 固定支払い先マスタを入力
 
@@ -163,7 +151,7 @@ Telegramで **「登録 会社名」** と送ると、メール経由と同じ�
 | 症状 | 確認すること |
 |---|---|
 | 初期セットアップで権限エラーが出る | 実行者（自分）のGoogleアカウントでGmail/Sheetsへのアクセスを許可したか確認 |
-| Telegramにボタンを押しても反応がない | `setTelegramWebhookToThisApp` を再実行。「デプロイ」→「デプロイを管理」で最新のウェブアプリURLになっているか確認 |
+| Telegramにボタンを押しても反応がない | `switchToPollingMode` を実行し、pollTelegramUpdatesトリガー（毎分）が有効か確認。反応まで最大1分かかります |
 | Gmailで検出されない | `INVOICE_GMAIL_QUERY` の条件に合っているか、対象メールがGmailの検索窓で同じクエリでヒットするか確認 |
 | Claude APIエラー | `CLAUDE_API_KEY` の設定、APIの利用上限を確認（実行ログに詳細が出ます） |
 | 実行ログを見たい | エディタ上部「実行数」タブ、または「表示」→「ログ」 |

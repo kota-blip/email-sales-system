@@ -863,6 +863,12 @@ function tgDeleteWebhook() {
   return tgCall_('deleteWebhook', { drop_pending_updates: true });
 }
 
+/** ポーリング方式で新着メッセージを取得する（Webhook不要。offset以降の未取得分を返す） */
+function tgGetUpdates(offset) {
+  const payload = { timeout: 0, offset: offset, allowed_updates: ['message', 'callback_query'] };
+  return tgCall_('getUpdates', payload);
+}
+
 /** Telegramのupdate JSONを扱いやすい形に変換する */
 function parseTelegramUpdate_(data) {
   if (data.callback_query) {
@@ -1291,6 +1297,42 @@ function doGet(e) {
   return ContentService.createTextOutput('OK: 請求書集計システム稼働中 ' + nowIso_());
 }
 
+/**
+ * ポーリング方式のメッセージ処理（Webhook不要・Google Workspaceの302問題を回避）
+ * 時間主導トリガー（1分ごと）で実行し、Telegramの新着メッセージ・ボタン操作を処理する。
+ * doPost（Webhook）と同じ handleMessage_/handleCallback_ を再利用する。
+ */
+function pollTelegramUpdates() {
+  const offset = Number(getProp('TG_OFFSET', '0'));
+  const data = tgGetUpdates(offset);
+  if (!data || !data.ok || !data.result || !data.result.length) return;
+
+  let maxId = offset - 1;
+  data.result.forEach(update => {
+    if (update.update_id > maxId) maxId = update.update_id;
+
+    // 二重処理防止（トリガー重複起動などの保険）
+    if (isDuplicateTelegramUpdate_(update.update_id)) return;
+
+    try {
+      const event = parseTelegramUpdate_(update);
+      // 自動通知の宛先を自己修復（話しかけてきた相手を記憶）
+      if (event.chatId) rememberChatId_(event.chatId);
+
+      if (event.type === 'callback_query') {
+        handleCallback_(event);
+      } else if (event.type === 'message') {
+        handleMessage_(event);
+      }
+    } catch (e) {
+      Logger.log('ポーリング処理エラー: ' + e);
+    }
+  });
+
+  // 次回は処理済みの次から取得する（これがTelegram側への「受け取った」の合図になる）
+  setProp('TG_OFFSET', String(maxId + 1));
+}
+
 function setAwaitingCorrection_(chatId, docId) {
   PropertiesService.getScriptProperties().setProperty('awaiting_' + chatId, docId);
 }
@@ -1589,7 +1631,7 @@ function onOpen() {
     .addItem('📊 月次集計を実行（先月分）', 'runMonthlyReportForPreviousMonth_')
     .addSeparator()
     .addItem('⚙️ 初期セットアップ（初回のみ）', 'initialSetup')
-    .addItem('🔗 Telegram Webhookを再設定', 'setTelegramWebhookToThisApp')
+    .addItem('📲 Telegram受信をポーリング方式にする', 'switchToPollingMode')
     .addToUi();
 }
 
@@ -1603,8 +1645,8 @@ function initialSetup() {
   setupTriggers();
   const message =
     '初期セットアップ完了！\n\n' +
-    '次に「デプロイ」→「新しいデプロイ」→「ウェブアプリ」で公開し、\n' +
-    'そのあと「🔗 Telegram Webhookを再設定」（=setTelegramWebhookToThisApp）を実行してください。';
+    'Telegram受信はポーリング方式（毎分getUpdates）で動きます。ウェブアプリの公開は不要です。\n' +
+    'もしWebhookを使っていた場合は「📲 Telegram受信をポーリング方式にする」を一度実行してください。';
   Logger.log(message);
   // SpreadsheetApp.getUi() はスプレッドシートのメニュー経由で呼んだときしか使えず、
   // エディタから直接実行した場合は呼び出し自体が例外になるため丸ごとtry/catchする
@@ -1619,7 +1661,33 @@ function setupTriggers() {
   deleteAllTriggers_();
   ScriptApp.newTrigger('processNewDocuments').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('dailyScheduleCheck').timeBased().everyDays(1).atHour(9).create();
-  Logger.log('✅ トリガーを設定しました（毎時: Gmail監視 / 毎日9時ごろ: 月次スケジュールチェック）');
+  ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+  Logger.log('✅ トリガーを設定しました（毎時: Gmail監視 / 毎日9時: 月次 / 毎分: Telegram受信）');
+}
+
+/**
+ * Telegram受信をWebhook方式からポーリング方式に切り替える（Google Workspaceの302問題を回避）。
+ * Webhookを解除し、1分ごとにgetUpdatesで新着を取りに行くトリガーを設定する。
+ * ウェブアプリの公開・URL登録・「全員に公開」が一切不要になる。
+ */
+function switchToPollingMode() {
+  const del = tgDeleteWebhook(); // Webhookを解除しないとgetUpdatesは使えない
+  Logger.log('deleteWebhook result: ' + JSON.stringify(del));
+
+  // 既存のポーリングトリガーを消して作り直す（重複防止）
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'pollTelegramUpdates') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+
+  // 溜まっていた古い更新は読み飛ばして、これ以降の新着だけ処理する
+  setProp('TG_OFFSET', '0');
+
+  const msg = '📲 ポーリング方式に切り替えました。\n' +
+    '1分以内に、Telegramで送ったメッセージが処理されるようになります。\n' +
+    'ウェブアプリの公開やWebhook登録はもう不要です。';
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
 
 function deleteAllTriggers_() {

@@ -1251,6 +1251,12 @@ function doPost(e) {
 
     const event = parseTelegramUpdate_(data);
 
+    // 自動通知（push）の宛先を自己修復する：Botに話しかけてきた相手のchat_idを常に記憶しておく。
+    // これにより、スクリプトプロパティTELEGRAM_CHAT_IDの手入力ミス（chat not found）を根本的に防ぐ。
+    if (event.chatId) {
+      rememberChatId_(event.chatId);
+    }
+
     if (event.type === 'callback_query') {
       handleCallback_(event);
     } else if (event.type === 'message') {
@@ -1260,6 +1266,15 @@ function doPost(e) {
     Logger.log('Webhook処理エラー: ' + err);
   }
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/** Botに話しかけてきた相手のchat_idを、自動通知の宛先として記憶する（手入力ミスの自己修復） */
+function rememberChatId_(chatId) {
+  const current = getProp('TELEGRAM_CHAT_ID', '');
+  if (String(current) !== String(chatId)) {
+    setProp('TELEGRAM_CHAT_ID', String(chatId));
+    Logger.log('📌 通知先chat_idを更新しました: ' + chatId);
+  }
 }
 
 /** 同じTelegram update_idを既に処理済みなら true（CacheServiceで最大6時間だけ記憶すれば十分） */
@@ -1373,6 +1388,22 @@ function handleMessage_(event) {
     return;
   }
 
+  if (normalized === '再通知' || normalized === '/renotify') {
+    // 読み取りに成功していて、まだ承認/却下していない書類だけを再通知（失敗行や確定済みは除く）
+    const pending = getPendingInvoices().filter(r => !isFailedExtractionRow_(r));
+    if (!pending.length) {
+      tgSendMessage('再通知が必要な書類はありません（未読み取りの分は「スキャン」で処理してください）', chatId);
+      return;
+    }
+    const batch = pending.slice(0, 15);
+    tgSendMessage(`🔔 未承認の書類を${batch.length}件、順に通知します...`, chatId);
+    batch.forEach(r => notifyNewDocument_(r, rowToExtracted_(r)));
+    if (pending.length > batch.length) {
+      tgSendMessage(`（残り${pending.length - batch.length}件は、もう一度「再通知」と送ると続きを通知します）`, chatId);
+    }
+    return;
+  }
+
   if (normalized === '/scan' || normalized.indexOf('スキャン') !== -1) {
     tgSendMessage('🔄 Gmailをスキャンします...', chatId);
     processNewDocuments();
@@ -1417,6 +1448,7 @@ function handleMessage_(event) {
     '「一覧」 - 未承認/要確認の書類一覧\n' +
     '「集計 [YYYY-MM]」 - 月次集計を実行（省略時は先月分）\n' +
     '「スキャン」 - Gmailを今すぐ確認\n' +
+    '「再通知」 - 未承認の書類をもう一度通知（承認ボタン付き）\n' +
     '「登録 会社名」 - メールに来ない請求書を手動登録\n' +
     '「停止」 - 緊急停止（Gmail監視・API呼び出しを全部止める）\n' +
     '「再開」 - 停止を解除\n' +

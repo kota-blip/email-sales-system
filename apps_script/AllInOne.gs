@@ -2,7 +2,6 @@
  * 請求書集計システム(Google Apps Script版) - 全部入り1ファイル版
  * 
  * このファイル1つを Apps Script の Code.gs にまるごと貼り付けるだけでOKです。
- * (中身は Config/SafetyGuard/SheetsService/GmailService/ClaudeService/Matcher/TelegramService/Main/WebhookHandler/Triggers を結合したもの)
  */
 
 
@@ -1022,7 +1021,10 @@ function processNewDocuments() {
       newCount++;
       touchedMonths.add(row['対象月']);
 
-      notifyNewDocument_(row, extracted);
+      // 請求書・見積書・納品書らしいものだけ通知する（証明書・領収書等の無関係PDFは記録のみで通知しない）
+      if (shouldNotify_(row)) {
+        notifyNewDocument_(row, extracted);
+      }
     }
   }
 
@@ -1044,6 +1046,21 @@ function isFailedExtractionRow_(row) {
   // 種別も取引先も不明のまま（読み取れていない）行も、念のため読み直し対象にする
   if (row['書類種別'] === '不明' && (row['取引先名'] === '(取引先不明)' || !row['取引先名'])) return true;
   return false;
+}
+
+/**
+ * この書類をTelegramに通知すべきか判定する。
+ * スキャンは広く（漏らさない）が、通知は請求書関連らしいものだけに絞ってノイズを減らす。
+ * - 「対象外」と判定されたもの（自社発行・領収書等）は通知しない
+ * - 種別が請求書/見積書/納品書のいずれでもなく、かつ支払対象でもないもの（証明書等の無関係PDF）は通知しない
+ * 記録自体はスプレッドシートに残るので、後から見返すことは可能。
+ */
+function shouldNotify_(row) {
+  if (row['支払対象'] === PAYABLE_NO) return false;
+  const t = row['書類種別'];
+  const isTargetType = (t === '請求書' || t === '見積書' || t === '納品書');
+  if (!isTargetType && row['支払対象'] !== PAYABLE_YES) return false;
+  return true;
 }
 
 function buildInvoiceRow_(docId, mailItem, filename, extracted) {
@@ -1431,8 +1448,8 @@ function handleMessage_(event) {
   }
 
   if (normalized === '再通知' || normalized === '/renotify') {
-    // 読み取りに成功していて、まだ承認/却下していない書類だけを再通知（失敗行や確定済みは除く）
-    const pending = getPendingInvoices().filter(r => !isFailedExtractionRow_(r));
+    // 読み取り成功・未承認・かつ請求書関連らしいものだけ再通知（失敗行・無関係PDFは除く）
+    const pending = getPendingInvoices().filter(r => !isFailedExtractionRow_(r) && shouldNotify_(r));
     if (!pending.length) {
       tgSendMessage('再通知が必要な書類はありません（未読み取りの分は「スキャン」で処理してください）', chatId);
       return;

@@ -195,8 +195,8 @@ function handleMessage_(event) {
   }
 
   if (normalized === '再通知' || normalized === '/renotify') {
-    // 読み取りに成功していて、まだ承認/却下していない書類だけを再通知（失敗行や確定済みは除く）
-    const pending = getPendingInvoices().filter(r => !isFailedExtractionRow_(r));
+    // 読み取り成功・未承認・かつ請求書関連らしいものだけ再通知（失敗行・無関係PDFは除く）
+    const pending = getPendingInvoices().filter(r => !isFailedExtractionRow_(r) && shouldNotify_(r));
     if (!pending.length) {
       tgSendMessage('再通知が必要な書類はありません（未読み取りの分は「スキャン」で処理してください）', chatId);
       return;
